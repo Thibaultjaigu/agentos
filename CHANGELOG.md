@@ -1,3 +1,7 @@
+## <small>0.10.16 (2026-09-10)</small>
+
+* fix(providers): correct GPT-5.6 cache retention and add the shipped 5.6 siblings ([7f55072d02ee1d73383539312ebba2f5c13fbeb6](https://github.com/framerslab/agentos/commit/7f55072d02ee1d73383539312ebba2f5c13fbeb6))
+
 ## <small>0.10.15 (2026-09-10)</small>
 
 * feat(providers): support GPT-6 (gpt-6-astra) across the OpenAI param guards ([f33595810842c5a0e8a411d104b655c07ae938ed](https://github.com/framerslab/agentos/commit/f33595810842c5a0e8a411d104b655c07ae938ed))
