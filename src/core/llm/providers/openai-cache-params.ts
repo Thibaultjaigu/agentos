@@ -27,8 +27,18 @@
  * - `prompt_cache_retention: '24h'`      → HTTP 200.
  * - `prompt_cache_retention: 'in_memory'`→ HTTP 400 `invalid_request_error`,
  *   "This model is compatible only with 24h extended prompt caching".
- * It is the first family to accept BOTH the ttl and retention surfaces, which
- * is why {@link TTL_30M_ONLY_FAMILIES} was split out of the ttl list.
+ * The same 2026-09-10 sweep re-probed the whole 5.6 family and corrected two
+ * things the 2026-07-19 guide reading got wrong:
+ * - `gpt-5.6` and `gpt-5.6-sol` are NOT ttl-exclusive — both return HTTP 200
+ *   for `prompt_cache_retention: '24h'`. The exclusivity short-circuit was
+ *   dropping retention params the API accepts, so
+ *   {@link TTL_30M_ONLY_FAMILIES} is now empty.
+ * - `gpt-5.6-terra` and `gpt-5.6-luna` (shipped siblings already carried in
+ *   the provider pricing table) were on no cache list at all, so every
+ *   retention request against them was silently omitted. Both probe
+ *   identically to the rest of the family.
+ * Every 5.6/6 id probed rejects `in_memory` with "This model is compatible
+ * only with 24h extended prompt caching", hence their ONLY_24H membership.
  */
 
 import { createHash } from 'node:crypto';
@@ -37,26 +47,36 @@ import { createHash } from 'node:crypto';
 export type OpenAiCacheRetention = 'in_memory' | '24h' | '30m';
 
 /** Families that accept `prompt_cache_options.ttl: '30m'`. */
-const TTL_30M_FAMILIES = ['gpt-5.6', 'gpt-5.6-sol', 'gpt-6-astra'] as const;
+const TTL_30M_FAMILIES = [
+  'gpt-5.6', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-6-astra',
+] as const;
 
 /**
  * The subset of {@link TTL_30M_FAMILIES} that accepts `prompt_cache_options.ttl`
  * EXCLUSIVELY — i.e. rejects `prompt_cache_retention` in every form.
  *
- * gpt-6-astra is deliberately NOT here: it accepts BOTH surfaces (live-probed
- * 2026-09-10, see the header), so the ttl-exclusivity short-circuit must not
- * swallow its valid `'24h'` support.
+ * EMPTY as of the 2026-09-10 probe sweep: no shipped family is ttl-exclusive.
+ * `gpt-5.6` and `gpt-5.6-sol` were listed here on the strength of the
+ * 2026-07-19 guide reading, but both return HTTP 200 for
+ * `prompt_cache_retention: '24h'` — so the short-circuit was suppressing
+ * retention params the API actually accepts. Kept as an empty list (rather
+ * than deleting the branch) so a family that DOES re-tighten can be restored
+ * with a one-line change plus a probe citation.
  */
-const TTL_30M_ONLY_FAMILIES = ['gpt-5.6', 'gpt-5.6-sol'] as const;
+const TTL_30M_ONLY_FAMILIES: readonly string[] = [];
 
 const RETENTION_24H_FAMILIES = [
   'gpt-6-astra',
+  'gpt-5.6', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna',
   'gpt-5.5', 'gpt-5.5-pro', 'gpt-5.4', 'gpt-5.2',
   'gpt-5.1', 'gpt-5.1-codex', 'gpt-5.1-codex-max', 'gpt-5.1-codex-mini', 'gpt-5.1-chat-latest',
   'gpt-5', 'gpt-5-codex', 'gpt-4.1',
 ] as const;
 
-const ONLY_24H_FAMILIES = ['gpt-5.5', 'gpt-5.5-pro', 'gpt-6-astra'] as const;
+const ONLY_24H_FAMILIES = [
+  'gpt-5.5', 'gpt-5.5-pro',
+  'gpt-5.6', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-6-astra',
+] as const;
 
 const SNAPSHOT_SUFFIX = /^-\d{4}-\d{2}-\d{2}$/;
 
@@ -90,9 +110,9 @@ export function resolveOpenAiCacheRetentionParams(
       ? { prompt_cache_options: { ttl: '30m' } }
       : null;
   }
-  // The 5.6 families use prompt_cache_options.ttl exclusively and 400 on any
-  // prompt_cache_retention. gpt-6-astra accepts both surfaces, so it is not in
-  // this list and falls through to the retention checks below.
+  // Currently empty (see TTL_30M_ONLY_FAMILIES): every shipped ttl-capable
+  // family also accepts prompt_cache_retention, so nothing short-circuits here
+  // and all of them fall through to the retention checks below.
   if (inFamilyList(modelId, TTL_30M_ONLY_FAMILIES)) return null;
   if (!inFamilyList(modelId, RETENTION_24H_FAMILIES)) return null;
   if (requested === '24h') return { prompt_cache_retention: '24h' };

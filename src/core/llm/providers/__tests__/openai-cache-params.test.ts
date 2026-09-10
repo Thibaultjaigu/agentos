@@ -15,8 +15,20 @@ describe('resolveOpenAiCacheRetentionParams', () => {
   it.each([
     ['gpt-5.6',            '30m',       { prompt_cache_options: { ttl: '30m' } }],
     ['gpt-5.6-sol',        '30m',       { prompt_cache_options: { ttl: '30m' } }],
-    ['gpt-5.6',            '24h',       null],
+    // Re-probed 2026-09-10: the 5.6 family is NOT ttl-exclusive — 24h is
+    // accepted (HTTP 200); only in_memory is refused ("compatible only with
+    // 24h extended prompt caching").
+    ['gpt-5.6',            '24h',       { prompt_cache_retention: '24h' }],
     ['gpt-5.6',            'in_memory', null],
+    ['gpt-5.6-sol',        '24h',       { prompt_cache_retention: '24h' }],
+    ['gpt-5.6-sol',        'in_memory', null],
+    // Shipped siblings that were previously on no cache list at all.
+    ['gpt-5.6-terra',      '30m',       { prompt_cache_options: { ttl: '30m' } }],
+    ['gpt-5.6-terra',      '24h',       { prompt_cache_retention: '24h' }],
+    ['gpt-5.6-terra',      'in_memory', null],
+    ['gpt-5.6-luna',       '30m',       { prompt_cache_options: { ttl: '30m' } }],
+    ['gpt-5.6-luna',       '24h',       { prompt_cache_retention: '24h' }],
+    ['gpt-5.6-luna',       'in_memory', null],
     ['gpt-5.5',            '24h',       { prompt_cache_retention: '24h' }],
     ['gpt-5.5',            'in_memory', null],
     ['gpt-5.5-pro',        'in_memory', null],

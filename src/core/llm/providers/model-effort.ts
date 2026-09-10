@@ -89,13 +89,14 @@ export function modelAcceptsXhighResponsesEffort(modelId: string): boolean {
  * fresh Responses probe returns HTTP 200 on the new id.
  *
  * 2026-09-10 probe (POST /v1/responses, `reasoning: {effort: 'max'}`,
- * max_output_tokens 16): HTTP 200 `status: completed` on `gpt-6-astra`.
- * GPT-6 joins the list. Note the asymmetry this preserves: the SAME id
- * rejects `'max'` on chat.completions (see {@link CHAT_MAX_EFFORT_MODELS}),
- * so `max` is a Responses-only tier for GPT-6 exactly as it is for 5.6.
+ * max_output_tokens 16): HTTP 200 `status: completed` on `gpt-6-astra`, and
+ * also on `gpt-5.6-terra` and `gpt-5.6-luna` — the two shipped 5.6 siblings
+ * that the 2026-08-06 sweep never probed. All three join the list. Note the
+ * asymmetry this preserves: the same ids reject `'max'` on chat.completions
+ * (see {@link CHAT_MAX_EFFORT_MODELS}), so `max` stays a Responses-only tier.
  */
 const RESPONSES_MAX_EFFORT_MODELS: ReadonlySet<string> = new Set([
-  'gpt-5.6', 'gpt-5.6-sol', 'gpt-6-astra',
+  'gpt-5.6', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-6-astra',
 ]);
 
 /**
