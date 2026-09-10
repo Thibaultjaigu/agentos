@@ -110,6 +110,23 @@ describe('mapEffortToOpenAiResponsesEffort (model-aware /v1/responses effort)', 
     expect(mapEffortToOpenAiReasoningEffortForModel('max', 'gpt-5.6')).toBe('xhigh');
   });
 
+  it('allow-lists gpt-6-astra for xhigh AND the real max tier (live-probed 2026-09-10)', () => {
+    expect(modelAcceptsXhighResponsesEffort('gpt-6-astra')).toBe(true);
+    expect(modelAcceptsMaxResponsesEffort('gpt-6-astra')).toBe(true);
+    expect(mapEffortToOpenAiResponsesEffort('gpt-6-astra', 'max')).toBe('max');
+    expect(mapEffortToOpenAiResponsesEffort('gpt-6-astra', 'xhigh')).toBe('xhigh');
+    // Responses-only asymmetry: the SAME id rejects max on chat/completions
+    // ("Supported values are: 'low', 'medium', 'high', and 'xhigh'").
+    expect(mapEffortToOpenAiReasoningEffortForModel('max', 'gpt-6-astra')).toBe('xhigh');
+  });
+
+  it('keeps unprobed gpt-6 siblings off both allow-lists (exact-id discipline)', () => {
+    expect(modelAcceptsMaxResponsesEffort('gpt-6-astra-pro')).toBe(false);
+    expect(modelAcceptsMaxResponsesEffort('gpt-6-nova')).toBe(false);
+    expect(modelAcceptsXhighResponsesEffort('gpt-6-nova')).toBe(false);
+    expect(mapEffortToOpenAiResponsesEffort('gpt-6-nova', 'max')).toBe('high');
+  });
+
   it('caps xhigh -> high for a non-allow-listed gpt-5 model', () => {
     expect(mapEffortToOpenAiResponsesEffort('gpt-5.4', 'max')).toBe('high');
     expect(mapEffortToOpenAiResponsesEffort('gpt-5-mini', 'xhigh')).toBe('high');

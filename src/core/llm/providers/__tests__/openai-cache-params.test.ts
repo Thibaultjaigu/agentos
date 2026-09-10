@@ -30,7 +30,17 @@ describe('resolveOpenAiCacheRetentionParams', () => {
     ['gpt-4.1-2025-04-14', '24h',       { prompt_cache_retention: '24h' }],
     ['gpt-4o',             '24h',       null],
     ['gpt-4o-mini',        'in_memory', null],
+    // GPT-6 (live-probed 2026-09-10): the first family to accept BOTH wire
+    // surfaces — ttl 30m AND retention 24h — while still rejecting in_memory
+    // ("This model is compatible only with 24h extended prompt caching").
+    ['gpt-6-astra',            '30m',       { prompt_cache_options: { ttl: '30m' } }],
+    ['gpt-6-astra',            '24h',       { prompt_cache_retention: '24h' }],
+    ['gpt-6-astra',            'in_memory', null],
+    ['gpt-6-astra-2026-09-03', '24h',       { prompt_cache_retention: '24h' }],
+    // An unprobed sibling must NOT be admitted by a bare `gpt-6` prefix.
     ['gpt-6-hypothetical', '30m',       null],
+    ['gpt-6-hypothetical', '24h',       null],
+    ['gpt-6-astrax',       '24h',       null], // non-snapshot suffix must not match
     ['gpt-5.5',            '30m',       null],
     ['gpt-5.4x',           '24h',       null], // non-snapshot suffix must not match
   ] as Array<[string, OpenAiCacheRetention, unknown]>)(
