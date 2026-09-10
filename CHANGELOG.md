@@ -1,3 +1,7 @@
+## <small>0.10.15 (2026-09-10)</small>
+
+* feat(providers): support GPT-6 (gpt-6-astra) across the OpenAI param guards ([f33595810842c5a0e8a411d104b655c07ae938ed](https://github.com/framerslab/agentos/commit/f33595810842c5a0e8a411d104b655c07ae938ed))
+
 ## <small>0.10.14 (2026-08-07)</small>
 
 * fix(api): enforce agent() controls.maxTotalTokens/maxDurationMs as per-call maxTokens/requestTimeout ([48d242b3766bcc1b53c7d4759471928dbcfd6f7b](https://github.com/framerslab/agentos/commit/48d242b3766bcc1b53c7d4759471928dbcfd6f7b))
