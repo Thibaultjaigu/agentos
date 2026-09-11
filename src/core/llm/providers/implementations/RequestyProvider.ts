@@ -340,8 +340,6 @@ export class RequestyProvider implements IProvider {
     }
 
     const accumulatedToolCalls: Map<number, { id?: string; type?: 'function'; function?: { name?: string; arguments?: string; } }> = new Map();
-    const abortHandler = () => { /* passive; loop logic handles emission */ };
-    abortSignal?.addEventListener('abort', abortHandler, { once: true });
 
     try {
       const stream = await this.makeApiRequest<NodeJS.ReadableStream>(
@@ -388,8 +386,6 @@ export class RequestyProvider implements IProvider {
       const message = error instanceof Error ? error.message : String(error);
       yield { id: `requesty-error-${Date.now()}`, object: 'chat.completion.chunk', created: Math.floor(Date.now()/1000), modelId, choices: [], error: { message, type: 'api_error' }, isFinal: true };
       return;
-    } finally {
-      abortSignal?.removeEventListener('abort', abortHandler);
     }
   }
 
