@@ -260,7 +260,7 @@ function createModelProviderManagerConfig(env: EnvironmentConfig): AIModelProvid
     providers.push({
       providerId: 'ollama',
       enabled: true,
-      isDefault: !env.OPENAI_API_KEY && !env.OPENROUTER_API_KEY,
+      isDefault: !env.OPENAI_API_KEY && !env.OPENROUTER_API_KEY && !env.REQUESTY_API_KEY,
       config: {
         baseURL: env.OLLAMA_BASE_URL,
         defaultModel: 'llama3.2',

@@ -147,8 +147,10 @@ export class RequestyProvider implements IProvider {
     this.keyPool = new ApiKeyPool(config.apiKey);
     this.defaultModelId = this.config.defaultModelId; // Store the potentially undefined value
 
+    // No Authorization header here: the key is resolved per request inside
+    // makeApiRequest (apiKeyOverride first, then the pool), so key rotation
+    // and per call overrides are honored instead of a key baked at init.
     const headers: Record<string, string> = {
-      'Authorization': `Bearer ${this.keyPool.next()}`,
       'Content-Type': 'application/json',
       'User-Agent': `AgentOS/1.0 (RequestyProvider; ${this.config.appName || 'UnknownApp'})`,
     };
@@ -290,7 +292,9 @@ export class RequestyProvider implements IProvider {
       'POST',
       // CR8: honor a per-call requestTimeout override over the provider default.
       options.requestTimeout ?? this.config.requestTimeout,
-      payload
+      payload,
+      false,
+      { apiKeyOverride: options.apiKeyOverride, signal: options.abortSignal }
     );
     return this.mapApiToCompletionResponse(apiResponseData, modelId);
   }
@@ -341,6 +345,13 @@ export class RequestyProvider implements IProvider {
 
     const accumulatedToolCalls: Map<number, { id?: string; type?: 'function'; function?: { name?: string; arguments?: string; } }> = new Map();
 
+    // Stream contract (see StreamingReconstructor.ts): exactly one chunk per
+    // stream carries isFinal:true. With stream_options.include_usage the API
+    // sends the finish_reason chunk and then a usage-only chunk, so the
+    // finish_reason chunk is buffered here and merged with the usage chunk
+    // before a single final chunk is emitted.
+    let pendingFinal: ModelCompletionResponse | undefined;
+
     try {
       const stream = await this.makeApiRequest<NodeJS.ReadableStream>(
         '/chat/completions',
@@ -348,11 +359,13 @@ export class RequestyProvider implements IProvider {
         // CR8: honor a per-call requestTimeout override over the stream default.
         options.requestTimeout ?? this.config.streamRequestTimeout,
         payload,
-        true
+        true,
+        { apiKeyOverride: options.apiKeyOverride, signal: abortSignal }
       );
 
       for await (const rawChunk of this.parseSseStream(stream)) {
         if (abortSignal?.aborted) {
+          pendingFinal = undefined;
           yield { id: `requesty-abort-${Date.now()}`, object: 'chat.completion.chunk', created: Math.floor(Date.now()/1000), modelId, choices: [], error: { message: 'Stream aborted by caller', type: 'abort' }, isFinal: true };
           break;
         }
@@ -366,23 +379,50 @@ export class RequestyProvider implements IProvider {
 
         if (rawChunk.startsWith('data: ')) {
           const jsonData = rawChunk.substring('data: '.length);
+          let apiChunk: RequestyChatCompletionAPIResponse;
           try {
-            const apiChunk = JSON.parse(jsonData) as RequestyChatCompletionAPIResponse;
-            yield this.mapApiToStreamChunkResponse(apiChunk, modelId, accumulatedToolCalls);
-            // Don't break on finish_reason: with stream_options.include_usage,
-            // Requesty (like OpenAI) emits a trailing usage-only chunk AFTER
-            // the finish_reason chunk and BEFORE [DONE]. Breaking here would
-            // skip the usage chunk and zero out the caller's token totals. The
-            // [DONE] marker check above is the right termination signal.
+            apiChunk = JSON.parse(jsonData) as RequestyChatCompletionAPIResponse;
           } catch (error: unknown) {
-            console.warn('RequestyProvider: Failed to parse stream chunk JSON, skipping chunk. Data:', jsonData, 'Error:', error);
+            // Do not log or attach the raw payload: it can hold completion
+            // text or tool arguments. Only the length is safe metadata.
+            throw new RequestyProviderError(
+              `Malformed SSE data chunk from Requesty (${jsonData.length} bytes could not be parsed as JSON).`,
+              'STREAM_CHUNK_MALFORMED',
+              undefined,
+              undefined,
+              { payloadLength: jsonData.length, parseError: error instanceof Error ? error.message : String(error) }
+            );
+          }
+          const mapped = this.mapApiToStreamChunkResponse(apiChunk, modelId, accumulatedToolCalls);
+          // Don't break on finish_reason: with stream_options.include_usage,
+          // Requesty (like OpenAI) emits a trailing usage-only chunk AFTER
+          // the finish_reason chunk and BEFORE [DONE]. Breaking here would
+          // skip the usage chunk and zero out the caller's token totals. The
+          // [DONE] marker check above is the right termination signal.
+          if (!mapped.isFinal) {
+            yield mapped;
+          } else if (mapped.choices.length > 0) {
+            pendingFinal = mapped;
+          } else if (pendingFinal) {
+            yield { ...pendingFinal, usage: mapped.usage ?? pendingFinal.usage };
+            pendingFinal = undefined;
+          } else {
+            yield mapped;
           }
         }
+      }
+      if (pendingFinal) {
+        // [DONE] (or end of stream) arrived without a usage-only chunk.
+        yield pendingFinal;
       }
     } catch (error: unknown) {
       // Provider contract (IProvider) requires a terminal isFinal:true chunk
       // even on error. If request setup or SSE iteration throws, surface it as
       // a final error chunk instead of letting the generator throw.
+      if (abortSignal?.aborted) {
+        yield { id: `requesty-abort-${Date.now()}`, object: 'chat.completion.chunk', created: Math.floor(Date.now()/1000), modelId, choices: [], error: { message: 'Stream aborted by caller', type: 'abort' }, isFinal: true };
+        return;
+      }
       const message = error instanceof Error ? error.message : String(error);
       yield { id: `requesty-error-${Date.now()}`, object: 'chat.completion.chunk', created: Math.floor(Date.now()/1000), modelId, choices: [], error: { message, type: 'api_error' }, isFinal: true };
       return;
@@ -417,7 +457,9 @@ export class RequestyProvider implements IProvider {
       '/embeddings',
       'POST',
       this.config.requestTimeout,
-      payload
+      payload,
+      false,
+      { apiKeyOverride: options?.apiKeyOverride }
     );
 
     return {
@@ -469,7 +511,12 @@ export class RequestyProvider implements IProvider {
       return { isHealthy: false, details: { message: "RequestyProvider not initialized (HTTP client missing)."}};
     }
     try {
-      await this.client.get('/models', { timeout: Math.min(this.config.requestTimeout || 10000, 10000) });
+      // Auth rides per request since the key is no longer on the axios
+      // instance; keep the health probe representative of real traffic.
+      await this.client.get('/models', {
+        timeout: Math.min(this.config.requestTimeout || 10000, 10000),
+        headers: { Authorization: `Bearer ${this.resolveApiKey()}` },
+      });
       return { isHealthy: true, details: { message: "Successfully connected to Requesty /models endpoint." } };
     } catch (error: unknown) {
       const err = error as AxiosError;
@@ -497,6 +544,16 @@ export class RequestyProvider implements IProvider {
     const choice = apiResponse.choices[0];
     if (!choice) {
       throw new RequestyProviderError("Received empty choices array from Requesty.", "API_RESPONSE_MALFORMED", undefined, undefined, { responseId: apiResponse.id });
+    }
+    const choiceWithoutMessage = apiResponse.choices.find(c => !c.message || typeof c.message !== 'object');
+    if (choiceWithoutMessage) {
+      throw new RequestyProviderError(
+        `Choice ${choiceWithoutMessage.index} in Requesty response has no message object.`,
+        "API_RESPONSE_MALFORMED",
+        undefined,
+        undefined,
+        { responseId: apiResponse.id, choiceIndex: choiceWithoutMessage.index }
+      );
     }
 
     const usage: ModelUsage | undefined = apiResponse.usage ? {
@@ -659,12 +716,39 @@ export class RequestyProvider implements IProvider {
       };
   }
 
+  /**
+   * Resolve the bearer key for one request: a per call override wins,
+   * otherwise the next key from the pool (weighted rotation).
+   */
+  private resolveApiKey(apiKeyOverride?: string): string {
+    if (apiKeyOverride) return apiKeyOverride;
+    return this.keyPool?.hasKeys ? this.keyPool.next() : this.config.apiKey;
+  }
+
+  /**
+   * Reduce an unknown thrown value to fields that are safe to attach to
+   * error details and to log. The raw Axios error keeps the request config
+   * (Authorization header, serialized body), so it is never stored as is.
+   */
+  private sanitizeUnderlyingError(error: unknown): { name?: string; code?: string; message?: string } {
+    if (error instanceof Error) {
+      const code = (error as Error & { code?: unknown }).code;
+      return {
+        name: error.name,
+        ...(typeof code === 'string' ? { code } : {}),
+        message: error.message,
+      };
+    }
+    return { message: String(error) };
+  }
+
   private async makeApiRequest<T = unknown>(
     endpoint: string,
     method: 'GET' | 'POST',
     timeout?: number,
     body?: Record<string, unknown>,
-    expectStream: boolean = false
+    expectStream: boolean = false,
+    perRequest?: { apiKeyOverride?: string; signal?: AbortSignal }
   ): Promise<T> {
     try {
       const response = await this.client.request<T>({
@@ -672,6 +756,10 @@ export class RequestyProvider implements IProvider {
         method,
         data: body,
         timeout: timeout,
+        headers: { Authorization: `Bearer ${this.resolveApiKey(perRequest?.apiKeyOverride)}` },
+        // Forward the caller's AbortSignal so an abort settles the request
+        // while Axios is still waiting for headers or the next body chunk.
+        ...(perRequest?.signal ? { signal: perRequest.signal } : {}),
         responseType: expectStream ? 'stream' as ResponseType : 'json' as ResponseType,
       });
       return response.data;
@@ -705,7 +793,7 @@ export class RequestyProvider implements IProvider {
         'API_REQUEST_FAILED',
         statusCode,
         errorType,
-        { requestEndpoint: endpoint, requestBodyKeys: body ? Object.keys(body) : undefined, responseData: errorData, underlyingError: error }
+        { requestEndpoint: endpoint, requestBodyKeys: body ? Object.keys(body) : undefined, responseData: errorData, underlyingError: this.sanitizeUnderlyingError(error) }
       );
     }
   }
@@ -731,9 +819,9 @@ export class RequestyProvider implements IProvider {
       }
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : "Requesty stream parsing/reading error";
-      console.error("RequestyProvider: Error reading or parsing SSE stream:", message, error);
+      console.error("RequestyProvider: Error reading or parsing SSE stream:", message);
       if (error instanceof RequestyProviderError) throw error;
-      throw new RequestyProviderError(message, 'STREAM_PARSING_ERROR', undefined, undefined, error);
+      throw new RequestyProviderError(message, 'STREAM_PARSING_ERROR', undefined, undefined, this.sanitizeUnderlyingError(error));
     } finally {
       if (typeof readableStream.destroy === 'function') {
         readableStream.destroy();
