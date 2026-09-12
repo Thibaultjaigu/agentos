@@ -1249,8 +1249,16 @@ export class OpenAIProvider implements IProvider {
    * Map a `/v1/responses` response into the same {@link ModelCompletionResponse}
    * shape the rest of agentos consumes from chat/completions: assistant text
    * from `output_text` message parts, tool calls from `function_call` items
-   * (call_id → id). A body with no usable output THROWS (→ fallback advances)
-   * rather than returning an empty success (Codex-Medium-2). @private
+   * (call_id → id).
+   *
+   * An output array with NO items at all THROWS (→ fallback advances) rather
+   * than returning an empty success (Codex-Medium-2). Output that holds items
+   * but no `message`/`function_call` does NOT throw: a reasoning model returns
+   * reasoning-only output when reasoning exhausts the output budget, which is
+   * a legitimate `length` finish. It maps to an empty turn (`content: null`)
+   * carrying the real finishReason, so the caller can retry with a larger
+   * budget instead of losing a whole multi-step build to one capped turn.
+   * @private
    */
   private mapResponsesToCompletionResponse(
     apiResponse: OpenAIAPITypes.ResponsesResponse,
@@ -1274,9 +1282,27 @@ export class OpenAIProvider implements IProvider {
       // reasoning + any other item type: ignored.
     }
 
-    if (assistantText.length === 0 && toolCalls.length === 0) {
-      // Malformed / empty 2xx — throw so generateText's fallback advances
-      // instead of treating an empty turn as a successful result.
+    const incompleteReason = apiResponse.incomplete_details?.reason;
+    const finishReason = toolCalls.length > 0
+      ? 'tool_calls'
+      : apiResponse.status === 'incomplete'
+        ? (incompleteReason === 'max_output_tokens' ? 'length'
+          : incompleteReason === 'content_filter' ? 'content_filter'
+          : 'stop')
+        : 'stop';
+
+    if (output.length === 0) {
+      // GENUINELY empty 2xx — no output items at all. This is the malformed
+      // body the guard was written for: throw so generateText's fallback
+      // advances instead of treating it as a successful empty turn.
+      //
+      // Deliberately NOT triggered by "items present but none usable": a
+      // reasoning model returns output holding ONLY a `reasoning` item when
+      // reasoning consumes the whole output budget. That is a well-formed
+      // `length` finish, not a malformed body, and this check used to sit
+      // ABOVE the finishReason computation — so it threw before the code that
+      // already knew how to express it could run, hard-erroring entire builds
+      // over one budget-capped turn.
       throw new OpenAIProviderError(
         `OpenAI /responses returned no usable output (status: ${apiResponse.status ?? 'unknown'})`,
         'INVALID_RESPONSE',
@@ -1287,14 +1313,21 @@ export class OpenAIProvider implements IProvider {
       );
     }
 
-    const incompleteReason = apiResponse.incomplete_details?.reason;
-    const finishReason = toolCalls.length > 0
-      ? 'tool_calls'
-      : apiResponse.status === 'incomplete'
-        ? (incompleteReason === 'max_output_tokens' ? 'length'
-          : incompleteReason === 'content_filter' ? 'content_filter'
-          : 'stop')
-        : 'stop';
+    if (assistantText.length === 0 && toolCalls.length === 0) {
+      // Items present but no message/function_call — reasoning-only output.
+      // Surfaced as an empty turn carrying the real finishReason ('length'
+      // when max_output_tokens capped it), so the caller can retry with a
+      // larger budget. Reasoning tokens are drawn from the SAME output budget
+      // as the visible answer, so a reasoning model needs a materially larger
+      // maxTokens than a non-reasoning one to leave room for a reply.
+      console.warn(
+        `OpenAIProvider: /responses returned reasoning-only output for ${apiResponse.model ?? modelId} ` +
+        `(status: ${apiResponse.status ?? 'unknown'}${incompleteReason ? `, reason: ${incompleteReason}` : ''}` +
+        `${apiResponse.usage?.output_tokens !== undefined ? `, output_tokens: ${apiResponse.usage.output_tokens}` : ''}` +
+        `) — returning an empty turn with finishReason '${finishReason}'. ` +
+        `Raise max output tokens: reasoning tokens consume the same budget as the reply.`
+      );
+    }
 
     return {
       id: apiResponse.id,

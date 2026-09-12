@@ -271,9 +271,67 @@ describe('OpenAIProvider.mapResponsesToCompletionResponse', () => {
     expect(cfRes.choices[0].finishReason).toBe('content_filter');
   });
 
-  it('THROWS on a body with no usable output (Codex-Medium-2 — must fall back, not empty-succeed)', () => {
+  it('THROWS only on a GENUINELY empty output array (Codex-Medium-2 — must fall back, not empty-succeed)', () => {
     expect(() => map({ id: 'r', model: 'gpt-5.5', status: 'completed', output: [] })).toThrow();
-    expect(() => map({ id: 'r', model: 'gpt-5.5', output: [{ type: 'reasoning', summary: [] }] })).toThrow();
+    expect(() => map({ id: 'r', model: 'gpt-5.5', status: 'completed' })).toThrow(); // output absent
+  });
+
+  it('reasoning-only + incomplete/max_output_tokens → finishReason length, no throw', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const res = map({
+      id: 'r', model: 'gpt-6-astra', status: 'incomplete',
+      incomplete_details: { reason: 'max_output_tokens' },
+      output: [{ type: 'reasoning', summary: [] }],
+      usage: { input_tokens: 20, output_tokens: 300, total_tokens: 320 },
+    }) as any;
+    // The regression: this used to throw before finishReason was computed,
+    // hard-erroring an entire build over one budget-capped turn.
+    expect(res.choices[0].finishReason).toBe('length');
+    expect(res.choices[0].message.content).toBeNull();
+    expect(res.choices[0].message.tool_calls).toBeUndefined();
+    expect(res.usage.completionTokens).toBe(300);
+    // Diagnostic must name the budget as the cause.
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0][0])).toMatch(/reasoning-only/i);
+    warn.mockRestore();
+  });
+
+  it('reasoning-only + completed → finishReason stop, no throw (empty turn)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const res = map({
+      id: 'r', model: 'gpt-6-astra', status: 'completed',
+      output: [{ type: 'reasoning', summary: [] }],
+      usage: { input_tokens: 10, output_tokens: 40, total_tokens: 50 },
+    }) as any;
+    expect(res.choices[0].finishReason).toBe('stop');
+    expect(res.choices[0].message.content).toBeNull();
+    warn.mockRestore();
+  });
+
+  it('reasoning-only + incomplete/content_filter → finishReason content_filter, no throw', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const res = map({
+      id: 'r', model: 'gpt-6-astra', status: 'incomplete',
+      incomplete_details: { reason: 'content_filter' },
+      output: [{ type: 'reasoning', summary: [] }],
+    }) as any;
+    expect(res.choices[0].finishReason).toBe('content_filter');
+    expect(res.choices[0].message.content).toBeNull();
+    warn.mockRestore();
+  });
+
+  it('reasoning + function_call (no message) still maps tool_calls normally', () => {
+    const res = map({
+      id: 'r', model: 'gpt-6-astra', status: 'completed',
+      output: [
+        { type: 'reasoning', summary: [] },
+        { type: 'function_call', call_id: 'c1', name: 'PickTemplate', arguments: '{"id":"a"}' },
+      ],
+    }) as any;
+    expect(res.choices[0].finishReason).toBe('tool_calls');
+    expect(res.choices[0].message.tool_calls).toEqual([
+      { id: 'c1', type: 'function', function: { name: 'PickTemplate', arguments: '{"id":"a"}' } },
+    ]);
   });
 });
 
