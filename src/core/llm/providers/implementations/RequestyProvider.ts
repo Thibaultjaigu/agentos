@@ -91,9 +91,9 @@ interface RequestyModelAPIObject {
   id: string;
   name: string;
   description: string;
-  pricing: {
-    prompt: string;
-    completion: string;
+  pricing?: {
+    prompt?: string;
+    completion?: string;
     request?: string;
     image?: string;
   };
@@ -228,8 +228,8 @@ export class RequestyProvider implements IProvider {
       description: apiModel.description,
       capabilities: Array.from(new Set(capabilities)),
       contextWindowSize: apiModel.context_length || undefined,
-      pricePer1MTokensInput: parsePrice(apiModel.pricing.prompt),
-      pricePer1MTokensOutput: parsePrice(apiModel.pricing.completion),
+      pricePer1MTokensInput: parsePrice(apiModel.pricing?.prompt),
+      pricePer1MTokensOutput: parsePrice(apiModel.pricing?.completion),
       supportsStreaming: true,
       status: 'active',
     };
@@ -351,6 +351,10 @@ export class RequestyProvider implements IProvider {
     // finish_reason chunk is buffered here and merged with the usage chunk
     // before a single final chunk is emitted.
     let pendingFinal: ModelCompletionResponse | undefined;
+    // Some upstreams routed through Requesty end the stream at [DONE] without
+    // ever sending finish_reason. Track whether a final chunk went out so one
+    // can be synthesized in that case.
+    let finalEmitted = false;
 
     try {
       const stream = await this.makeApiRequest<NodeJS.ReadableStream>(
@@ -366,6 +370,7 @@ export class RequestyProvider implements IProvider {
       for await (const rawChunk of this.parseSseStream(stream)) {
         if (abortSignal?.aborted) {
           pendingFinal = undefined;
+          finalEmitted = true;
           yield { id: `requesty-abort-${Date.now()}`, object: 'chat.completion.chunk', created: Math.floor(Date.now()/1000), modelId, choices: [], error: { message: 'Stream aborted by caller', type: 'abort' }, isFinal: true };
           break;
         }
@@ -404,16 +409,31 @@ export class RequestyProvider implements IProvider {
           } else if (mapped.choices.length > 0) {
             pendingFinal = mapped;
           } else if (pendingFinal) {
+            finalEmitted = true;
             yield { ...pendingFinal, usage: mapped.usage ?? pendingFinal.usage };
             pendingFinal = undefined;
           } else {
+            finalEmitted = true;
             yield mapped;
           }
         }
       }
       if (pendingFinal) {
         // [DONE] (or end of stream) arrived without a usage-only chunk.
+        finalEmitted = true;
         yield pendingFinal;
+      } else if (!finalEmitted) {
+        // Stream ended without any finish_reason or usage chunk. Emit the
+        // terminal chunk the provider contract requires so consumers see
+        // completion.
+        yield {
+          id: `requesty-final-${Date.now()}`,
+          object: 'chat.completion.chunk',
+          created: Math.floor(Date.now() / 1000),
+          modelId,
+          choices: [{ index: 0, message: { role: 'assistant', content: null }, finishReason: 'stop' }],
+          isFinal: true,
+        };
       }
     } catch (error: unknown) {
       // Provider contract (IProvider) requires a terminal isFinal:true chunk
@@ -461,6 +481,16 @@ export class RequestyProvider implements IProvider {
       false,
       { apiKeyOverride: options?.apiKeyOverride }
     );
+
+    if (!Array.isArray(apiResponseData?.data) || !apiResponseData.usage) {
+      throw new RequestyProviderError(
+        'Malformed embeddings response from Requesty: missing data array or usage.',
+        'API_RESPONSE_MALFORMED',
+        undefined,
+        undefined,
+        { hasData: Array.isArray(apiResponseData?.data), hasUsage: !!apiResponseData?.usage }
+      );
+    }
 
     return {
       object: 'list',
