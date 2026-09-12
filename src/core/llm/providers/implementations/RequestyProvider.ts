@@ -271,8 +271,8 @@ export class RequestyProvider implements IProvider {
       // Requesty reserves credits up to max_tokens at request time. When the
       // caller doesn't specify a limit, it falls back to the model's full output
       // capacity (e.g. 64000 for claude-haiku-4-5), which causes 402 credit-required
-      // errors on accounts without enough buffer. Default to 4096 — the same value
-      // AnthropicProvider uses — so short prompts succeed without explicit tuning.
+      // errors on accounts without enough buffer. Default to 4096, the same value
+      // AnthropicProvider uses, so short prompts succeed without explicit tuning.
       // Then clamp to the model's output ceiling so a request sized for a
       // flagship model is not rejected when routed to a lower-ceiling OpenAI
       // model (e.g. openai/gpt-4o caps at 16384, not 32000).
@@ -321,8 +321,8 @@ export class RequestyProvider implements IProvider {
       // Requesty reserves credits up to max_tokens at request time. When the
       // caller doesn't specify a limit, it falls back to the model's full output
       // capacity (e.g. 64000 for claude-haiku-4-5), which causes 402 credit-required
-      // errors on accounts without enough buffer. Default to 4096 — the same value
-      // AnthropicProvider uses — so short prompts succeed without explicit tuning.
+      // errors on accounts without enough buffer. Default to 4096, the same value
+      // AnthropicProvider uses, so short prompts succeed without explicit tuning.
       // Then clamp to the model's output ceiling so a request sized for a
       // flagship model is not rejected when routed to a lower-ceiling OpenAI
       // model (e.g. openai/gpt-4o caps at 16384, not 32000).
