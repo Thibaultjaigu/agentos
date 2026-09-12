@@ -1,3 +1,7 @@
+## <small>0.10.18 (2026-09-12)</small>
+
+* fix(providers): don't throw on reasoning-only /v1/responses output ([e116f4ed5cbcecb35f0ddbb350ff2fa0ea42eec3](https://github.com/framerslab/agentos/commit/e116f4ed5cbcecb35f0ddbb350ff2fa0ea42eec3))
+
 ## <small>0.10.17 (2026-09-11)</small>
 
 * fix(providers): route /v1/responses when system content is cache-marked blocks ([82f028e55e23c6b5f03413be2bdff819fef76ca6](https://github.com/framerslab/agentos/commit/82f028e55e23c6b5f03413be2bdff819fef76ca6))
